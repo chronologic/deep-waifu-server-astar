@@ -1,14 +1,11 @@
 import { UploadedFile } from 'express-fileupload';
-import * as anchor from '@project-serum/anchor';
 import queue from 'queue';
 
 import { MINUTE_MILLIS } from '../../constants';
-import { CREATOR_ADDRESS, PAYMENT_PROGRAM_ID } from '../../env';
 import { createLogger } from '../../logger';
-import { getNameAndUri, IManifest, uploadAndMint } from '../../metaplex';
+import { createOpenseaManifest, createTimedCache } from '../../utils';
+import { provider, deepWaifuContract } from '../../astar';
 import { BadRequestError, NotFoundError } from '../errors';
-import { createMetaplexManifest, createTimedCache } from '../../utils';
-import { provider, getPaymentProgramPdaAddress, paymentProgram, walletKeyPair } from '../../solana';
 
 interface IMintParams {
   tx: string;
@@ -39,7 +36,7 @@ const MAX_FILE_SIZE_KB = 1024;
 const MAX_NAME_LENGTH = 24;
 
 const q = queue({
-  concurrency: 1,
+  concurrency: 10,
   autostart: true,
 });
 
@@ -61,8 +58,8 @@ async function mint({ tx, dayPayment, waifu, certificate, name }: IMintParams) {
     logger.info(`[${tx}] 📊 validating tx...`);
     const decodedTx = await decodeAndValidateTx(tx, dayPayment);
 
-    logger.info(`[${tx}] 🗂 verifying id...`);
-    await verifyIdNotUsed(decodedTx.id);
+    // logger.info(`[${tx}] 🗂 verifying id...`);
+    // await verifyIdNotUsed(decodedTx.id);
 
     logger.info(`[${tx}] 🚀 minting to ${decodedTx.payer}...`);
     const mintedRes = await mintNft({ tx, dayPayment, waifu, certificate, name }, decodedTx);
@@ -96,102 +93,46 @@ function validateFileSize(selfie: UploadedFile) {
 }
 
 async function decodeAndValidateTx(tx: string, dayPayment: boolean): Promise<IMintPaymentTx> {
-  const { meta, transaction } = await provider.connection.getTransaction(tx);
+  const txReceipt = await provider.getTransactionReceipt(tx);
 
-  if (meta.err) {
+  if (txReceipt.status !== 1) {
     throw new BadRequestError('Invalid payment tx: tx failed');
   }
 
-  const accountKeys = transaction.message.accountKeys.map((k) => k.toBase58());
-
-  if (!accountKeys.includes(PAYMENT_PROGRAM_ID)) {
-    throw new BadRequestError('Invalid payment tx: payment program missing');
+  if (txReceipt.to.toLowerCase() !== deepWaifuContract.address.toLowerCase()) {
+    throw new BadRequestError('Invalid payment tx: invalid target');
   }
 
-  const logs = extractProgramLogs(meta.logMessages);
-
-  const { payer, id } = extractPayerAndIdFromLogs(logs);
-
-  if (!payer || !id) {
-    throw new BadRequestError('Invalid payment tx: payer and/or id missing');
+  if (txReceipt.logs.length !== 1) {
+    throw new BadRequestError('Invalid payment tx: unexpected logs length');
   }
 
-  const [pdaPubkey] = await getPaymentProgramPdaAddress();
+  const log = txReceipt.logs[0];
 
-  const { priceLamports, priceDay, beneficiary, beneficiaryDay } = (await paymentProgram.account.paymentStorage.fetch(
-    pdaPubkey
-  )) as any;
-
-  if (dayPayment) {
-    const beneficiaryIndex = accountKeys.findIndex((k) => k === beneficiaryDay.toBase58());
-
-    const preTokenBalance = new anchor.BN(
-      meta.preTokenBalances.find((b) => b.accountIndex === beneficiaryIndex).uiTokenAmount.amount
-    );
-    const postTokenBalance = new anchor.BN(
-      meta.postTokenBalances.find((b) => b.accountIndex === beneficiaryIndex).uiTokenAmount.amount
-    );
-    const balanceDiff = postTokenBalance.sub(preTokenBalance);
-
-    if (balanceDiff.toNumber() !== priceDay.toNumber()) {
-      throw new BadRequestError('Invalid payment tx: invalid DAY payment amount');
-    }
-  } else {
-    const beneficiaryIndex = accountKeys.findIndex((k) => k === beneficiary.toBase58());
-
-    const beneficiaryBalanceDiff = meta.postBalances[beneficiaryIndex] - meta.preBalances[beneficiaryIndex];
-
-    // allow some difference for tx fee
-    if (beneficiaryBalanceDiff < priceLamports.toNumber() * 0.95) {
-      throw new BadRequestError('Invalid payment tx: invalid payment amount');
-    }
+  const { name, args } = deepWaifuContract.interface.parseLog(log);
+  if (name !== 'PaidForMint') {
+    throw new BadRequestError('Invalid payment tx: unexpected log name');
   }
+
+  const [payer, amount, id] = args;
 
   return { payer, id };
-}
-
-function extractProgramLogs(logMessages: string[]): string[] {
-  const startIndex = logMessages.findIndex((msg) => msg.startsWith(`Program ${PAYMENT_PROGRAM_ID} invoke`));
-  const endIndex = logMessages.findIndex((msg) => msg === `Program ${PAYMENT_PROGRAM_ID} success`);
-
-  return logMessages.slice(startIndex, endIndex);
-}
-
-function extractPayerAndIdFromLogs(logMessages: string[]): IMintPaymentTx {
-  const paymentRegex = /\[([A-Za-z0-9]{44}):([0-9]{1,4})\]/;
-  const msg = logMessages.find((msg) => msg.includes('Paid for mint'));
-  const [_, payer, id] = msg.match(paymentRegex);
-
-  return { payer, id: Number(id) };
-}
-
-async function verifyIdNotUsed(id: number) {
-  const { uri } = await getNameAndUri({ index: id - 1, walletKeyPair });
-
-  if (uri.startsWith('http')) {
-    throw new BadRequestError(`ID ${id} has been spent`);
-  }
 }
 
 async function mintNft(
   { waifu, certificate, name }: IMintParams,
   { id, payer }: IMintPaymentTx
 ): Promise<{ tx: string; metadataLink: string; certificateLink: string }> {
-  const manifest = createMetaplexManifest({
+  // TODO: upload certificate and image
+  const manifest = createOpenseaManifest({
     name,
     id,
-    creatorAddress: CREATOR_ADDRESS,
+    imageUrl: '',
+    certificateUrl: '',
   });
-  const res = await uploadAndMint({
-    image: waifu.data,
-    certificate: certificate.data,
-    index: id - 1,
-    manifest,
-    mintToAddress: payer,
-    walletKeyPair,
-  });
+  const res = await deepWaifuContract.functions.mintNFT(payer, id, 'empty');
 
-  return res;
+  return { tx: res.hash, metadataLink: '', certificateLink: '' };
 }
 
 export function getStatus(paymentTx: string) {

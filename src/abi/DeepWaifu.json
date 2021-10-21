@@ -283,9 +283,9 @@
       "name": "mintNFT",
       "outputs": [
         {
-          "internalType": "uint256",
+          "internalType": "uint16",
           "name": "",
-          "type": "uint256"
+          "type": "uint16"
         }
       ],
       "stateMutability": "nonpayable",
@@ -352,7 +352,13 @@
     {
       "inputs": [],
       "name": "payForMint",
-      "outputs": [],
+      "outputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
       "stateMutability": "payable",
       "type": "function"
     },
@@ -546,6 +552,7 @@
       "type": "function"
     }
   ],
+
   "linkReferences": {},
   "deployedLinkReferences": {}
 }
