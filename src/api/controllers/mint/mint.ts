@@ -10,7 +10,6 @@ const mint: RequestHandler = async (req, res) => {
     certificate: req.files.certificate as UploadedFile,
     name: req.body.name,
     tx: req.body.tx,
-    dayPayment: req.body.dayPayment,
   });
 
   res.setHeader('Content-Type', 'application/json');

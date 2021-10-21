@@ -6,10 +6,10 @@ import { createLogger } from '../../logger';
 import { createOpenseaManifest, createTimedCache } from '../../utils';
 import { provider, deepWaifuContract } from '../../astar';
 import { BadRequestError, NotFoundError } from '../errors';
+import { pinFile, pinJson } from './pinata';
 
 interface IMintParams {
   tx: string;
-  dayPayment: boolean;
   waifu: UploadedFile;
   certificate: UploadedFile;
   name: string;
@@ -50,19 +50,19 @@ export async function pushMintToQueue(params: IMintParams): Promise<void> {
   q.push(async () => mint(params));
 }
 
-async function mint({ tx, dayPayment, waifu, certificate, name }: IMintParams) {
+async function mint({ tx, waifu, certificate, name }: IMintParams) {
   try {
     logger.info(`[${tx}] 🧮 processing...`);
     cache.put(tx, { status: 'processing', message: 'Processing...' });
 
     logger.info(`[${tx}] 📊 validating tx...`);
-    const decodedTx = await decodeAndValidateTx(tx, dayPayment);
+    const decodedTx = await decodeAndValidateTx(tx);
 
     // logger.info(`[${tx}] 🗂 verifying id...`);
     // await verifyIdNotUsed(decodedTx.id);
 
     logger.info(`[${tx}] 🚀 minting to ${decodedTx.payer}...`);
-    const mintedRes = await mintNft({ tx, dayPayment, waifu, certificate, name }, decodedTx);
+    const mintedRes = await mintNft({ tx, waifu, certificate, name }, decodedTx);
     cache.put(tx, {
       status: 'minted',
       message: 'Success!',
@@ -92,7 +92,7 @@ function validateFileSize(selfie: UploadedFile) {
   }
 }
 
-async function decodeAndValidateTx(tx: string, dayPayment: boolean): Promise<IMintPaymentTx> {
+async function decodeAndValidateTx(tx: string): Promise<IMintPaymentTx> {
   const txReceipt = await provider.getTransactionReceipt(tx);
 
   if (txReceipt.status !== 1) {
@@ -123,16 +123,24 @@ async function mintNft(
   { waifu, certificate, name }: IMintParams,
   { id, payer }: IMintPaymentTx
 ): Promise<{ tx: string; metadataLink: string; certificateLink: string }> {
-  // TODO: upload certificate and image
+  // eslint-disable-next-line prefer-template
+  const waifuLink = await pinFile(waifu.data, 'waifu.png', name + ' image');
+  // eslint-disable-next-line prefer-template
+  const certificateLink = await pinFile(certificate.data, 'certificate.png', name + ' certificate');
+
   const manifest = createOpenseaManifest({
     name,
     id,
-    imageUrl: '',
-    certificateUrl: '',
+    imageUrl: waifuLink,
+    certificateUrl: certificateLink,
   });
-  const res = await deepWaifuContract.functions.mintNFT(payer, id, 'empty');
 
-  return { tx: res.hash, metadataLink: '', certificateLink: '' };
+  // eslint-disable-next-line prefer-template
+  const metadataLink = await pinJson(manifest, name + ' metadata');
+
+  const res = await deepWaifuContract.functions.mintNFT(payer, id, metadataLink);
+
+  return { tx: res.hash, metadataLink, certificateLink };
 }
 
 export function getStatus(paymentTx: string) {
