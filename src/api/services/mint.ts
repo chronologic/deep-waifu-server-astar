@@ -123,6 +123,7 @@ async function mintNft(
   { waifu, certificate, name }: IMintParams,
   { id, payer }: IMintPaymentTx
 ): Promise<{ tx: string; metadataLink: string; certificateLink: string }> {
+  logger.info('Uploading images and metadata...');
   // eslint-disable-next-line prefer-template
   const waifuLink = await pinFile(waifu.data, 'waifu.png', name + ' image');
   // eslint-disable-next-line prefer-template
@@ -138,7 +139,9 @@ async function mintNft(
   // eslint-disable-next-line prefer-template
   const metadataLink = await pinJson(manifest, name + ' metadata');
 
-  const res = await deepWaifuContract.functions.mintNFT(payer, id, metadataLink);
+  logger.info('Minting...');
+
+  const res = await deepWaifuContract.mintNFT(payer, id, metadataLink);
 
   return { tx: res.hash, metadataLink, certificateLink };
 }
