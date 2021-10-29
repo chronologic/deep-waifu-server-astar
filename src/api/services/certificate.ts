@@ -1,7 +1,7 @@
 import { UI_URL } from '../../env';
 
 export function renderView(certificateId: string): string {
-  const certificateUrl = `https://www.arweave.net/${certificateId}?ext=png`;
+  const certificateUrl = `https://gateway.pinata.cloud/ipfs/${certificateId}`;
   const title = 'DeepWaifu Certificate of Adoption ヽ(*・ω・)ﾉ';
 
   return `<!DOCTYPE html>
